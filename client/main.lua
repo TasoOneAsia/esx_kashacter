@@ -1,7 +1,7 @@
 local ESX = nil
 local IsChoosing = true
 
-Citizen.CreateThread(function()
+CreateThread(function()
     while ESX == nil do
         TriggerEvent('esx:getSharedObject', function(obj) ESX = obj end)
         Citizen.Wait(0)
@@ -11,9 +11,9 @@ end)
 -- This Code Was changed to fix error With player spawner as default --
 -- Link to the post with the error fix --
 -- https://forum.fivem.net/t/release-esx-kashacters-multi-character/251613/316?u=xxfri3ndlyxx --
-Citizen.CreateThread(function()
+CreateThread(function()
     while true do
-        Citizen.Wait(200)
+        Wait(200)
         if ESX ~= nil then
             if NetworkIsSessionStarted() and not ESX.IsPlayerLoaded() then
                 TriggerServerEvent("kashactersS:SetupCharacters")
@@ -24,7 +24,7 @@ Citizen.CreateThread(function()
     end
 end)
 
-Citizen.CreateThread(function ()
+CreateThread(function ()
     while true do
         Citizen.Wait(0)
         if IsChoosing then
@@ -117,7 +117,7 @@ RegisterNUICallback("CharacterChosen", function(data, cb)
     while not IsScreenFadedOut() do
         Citizen.Wait(10)
     end
-    cb("ok")
+    cb({ })
 end)
 
 RegisterNUICallback("DeleteCharacter", function(data, cb)
@@ -127,5 +127,5 @@ RegisterNUICallback("DeleteCharacter", function(data, cb)
     while not IsScreenFadedOut() do
         Citizen.Wait(10)
     end
-    cb("ok")
+    cb({})
 end)
