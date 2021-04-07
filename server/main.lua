@@ -3,149 +3,248 @@
 -- where identifiers are used (such as users, owned_vehicles, owned_properties etc.)
 ---------------------------------------------------------------------------------------
 
-local IdentifierTables = {
-    {table = "addon_account_data", column = "owner"},
-    {table = "addon_inventory_items", column = "owner"},
-    {table = "billing", column = "identifier"},
-    {table = "datastore_data", column = "owner"},
-    {table = "owned_vehicles", column = "owner"},
-    {table = "owned_properties", column = "owner"},
-    {table = "rented_vehicles", column = "owner"},
-    {table = "users", column = "identifier"},
-    {table = "user_licenses", column = "owner"}
-}
+local IdentifierTables = KashServerCfg.IdentifierTables
 
+--- Initial boostrap event triggered by client
+--- time to set some stuff up for them
 RegisterServerEvent("kashactersS:SetupCharacters")
 AddEventHandler('kashactersS:SetupCharacters', function()
     local src = source
     local LastCharId = GetLastCharacter(src)
 
-    SetIdentifierToChar(GetRockstarID(src), LastCharId)
+    SetIdentifierToChar(GetGameLicense(src), LastCharId)
     local Characters = GetPlayerCharacters(src)
     TriggerClientEvent('kashactersC:SetupUI', src, Characters)
 end)
 
+--- Char Chosen handler, emitted when a client chooses
+--- to confirm loading a selected character
 RegisterServerEvent("kashactersS:CharacterChosen")
 AddEventHandler('kashactersS:CharacterChosen', function(charid, ischar)
     local src = source
     local new = true
-    local spawn = {}
-    if type(charid) == "number" and string.len(charid) == 1 and type(ischar) == "boolean" then
+    -- Sus type check again.
+    if type(charid) == "number" and charid:len() == 1 and type(ischar) == "boolean" then
         SetLastCharacter(src, tonumber(charid))
-        SetCharToIdentifier(GetRockstarID(src), tonumber(charid))
-    
+        SetCharToIdentifier(GetGameLicense(src), tonumber(charid))
+
+        local spawn
         if ischar == true then
             new = false
             spawn = GetSpawnPos(src)
         else
             TriggerClientEvent('skinchanger:loadDefaultModel', src, true, cb)
-            spawn = { x = 195.55, y = -933.36, z = 29.90 } -- DEFAULT SPAWN POSITION
+            spawn = KashServerCfg.DefaultSpawnLocation -- DEFAULT SPAWN POSITION
         end
 
         TriggerClientEvent("kashactersC:SpawnCharacter", src, spawn, new)
     else
-        -- Trigger Ban Event here to ban individuals trying to use SQL Injections
+        rint(('[^1esx_kashacters^0] %s. CharID: %s, Source: %s'):format('Type checked failed for char chosen event', charid, src))
     end
 end)
 
+--- Ensure that this event has apt security behind it, as it
+--- targeted often.
 RegisterServerEvent("kashactersS:DeleteCharacter")
 AddEventHandler('kashactersS:DeleteCharacter', function(charid)
     local src = source
+
+    -- Do type checks here lol, apparently guy before thought
+    -- to do this rather than using prepared statements instead of
+    -- directly concatenating into the query string
+
     if type(charid) == "number" and string.len(charid) == 1 then
-        DeleteCharacter(GetRockstarID(src), charid)
+        DeleteCharacter(GetGameLicense(src), charid)
+        -- We trigger a refresh after killing it
         TriggerClientEvent("kashactersC:ReloadCharacters", src)
     else
-        -- Trigger Ban Event here to ban individuals trying to use SQL Injections
+        print(('[^1esx_kashacters^0] %s. CharID: %s, Source: %s'):format('Type checked failed for delete char event', charid, src))
     end
 end)
 
-function GetPlayerCharacters(source)
-    local Chars = MySQLAsyncExecute("SELECT * FROM `users` WHERE identifier LIKE '%"..GetIdentifierWithoutLicense(GetRockstarID(source)).."%'")
-    for i = 1, #Chars, 1 do
-        charJob = MySQLAsyncExecute("SELECT * FROM `jobs` WHERE `name` = '"..Chars[i].job.."'")
-        charJobgrade = MySQLAsyncExecute("SELECT * FROM `job_grades` WHERE `grade` = '"..Chars[i].job_grade.."' AND `job_name` = '"..Chars[i].job.."'")
-        local accounts = json.decode(Chars[i].accounts)
-        Chars[i].bank = accounts["bank"]
-        Chars[i].money = accounts["money"]
-        Chars[i].job = charJob[1].label
+--- Get a nested table of Characters and CharacterData
+---@param src number playerId
+---@return table
+function GetPlayerCharacters(src)
+    local Chars = MySQL.Sync.fetchAll("SELECT * FROM users WHERE identifier LIKE @identifier", {
+        identifier = GetIdentifierWithoutLicense(GetGameLicense(src))
+    })
+
+    -- We now iterate and mutate each char depending
+    -- on queries. Mutable boys > immutable boys
+    for _, char in ipairs(Chars) do
+        -- This is stored as a string
+        -- at this time in exec
+        local accounts = json.decode(char.accounts)
+
+        local charJob = MySQL.Sync.fetchAll("SELECT * FROM jobs WHERE name = @name", {
+            name = char.job
+        })
+        -- Select the job grades previous char
+        local charJobgrade = MySQL.Sync.fetchAll("SELECT * FROM job_grades WHERE grade = @grade AND job_name = @jobname", {
+            grade = char.job_grade,
+            jobname = char.jobname
+        })
+
+        char.bank = accounts.bank
+        char.money = accounts.money
+
+        char.job = charJob[1].label
+
+        -- Welface check
         if charJob[1].label == "Unemployed" then
-            Chars[i].job_grade = ""
+            char.job_grade = ""
         else
-            Chars[i].job_grade = charJobgrade[1].label	
+            charJob.job_grade = charJobgrade[1].label
         end
-        if Chars[i].sex == "m" then
-            Chars[i].sex = "Male"
+
+
+        if char.sex == "m" then
+            char.sex = "Male"
         else
-            Chars[i].sex = "Female"	
+            char.sex = "Female"
         end
+
     end
+
     return Chars
 end
 
-function GetLastCharacter(source)
-    local LastChar = MySQLAsyncExecute("SELECT `charid` FROM `user_lastcharacter` WHERE `license` = '"..GetRockstarID(source).."'")
-
+--- Get the last character
+--- @param src number PlayerID ie 'source'
+--- @return number
+function GetLastCharacter(src)
+    local LastChar = MySQL.Sync.fetchAll([[
+        SELECT charid
+        FROM user_lastcharacter
+        WHERE license = @license
+    ]], {
+        license = GetGameLicense(src)
+    })
+    -- If we actually get a LastChar back from query
     if LastChar[1] ~= nil and LastChar[1].charid ~= nil then
         return tonumber(LastChar[1].charid)
+    -- Just create a new row for user_lastcharacter then
     else
-        MySQLAsyncExecute("INSERT INTO `user_lastcharacter` (`license`, `charid`) VALUES('"..GetRockstarID(source).."', 1)")
+        MySql.Async.fetchAll("INSERT INTO user_lastcharacter (license, charid) VALUES (@license, 1)", {
+            license = GetGameLicense(src)
+        })
         return 1
     end
 end
-
-function SetLastCharacter(source, charid)
-    MySQLAsyncExecute("UPDATE `user_lastcharacter` SET `charid` = '"..charid.."' WHERE `license` = '"..GetRockstarID(source).."'")
+--- Update database with last used character for a license
+---@param src number playerId
+---@param charid number Set the last character ID for a player
+---@return void
+function SetLastCharacter(src, charid)
+    MySql.Async.execute([[
+        UPDATE `user_lastcharacter`
+        SET `charid` = @charid
+        WHERE `license` = @license
+    ]], {
+        charid = charid,
+        license = GetGameLicense(src)
+    })
 end
-
+--- Set a specific player row in database to a char
+--- using identifier
+--- @param identifier string The identifier to resolve
+--- @param charid number The character ID to set for the player
+---
 function SetIdentifierToChar(identifier, charid)
-    for _, itable in pairs(IdentifierTables) do
-        MySQLAsyncExecute("UPDATE `"..itable.table.."` SET `"..itable.column.."` = 'Char"..charid..GetIdentifierWithoutLicense(identifier).."' WHERE `"..itable.column.."` = '"..identifier.."'")
+    local formatCharId = ('Char%s%s'):format(charid, GetIdentifierWithoutLicense(identifier))
+    for i = 1, #IdentifierTables, 1 do
+        local identifierObj = IdentifierTables[i]
+        MySQL.Async.execute([[
+            UPDATE `@identiferTable`
+            SET `@tableColumn = @charId
+            WHERE   @identifierTable = @identifier
+        ]], {
+            charid = formatCharId,
+            identifierTable = identifierObj.table,
+            dentifierTable = identifierObj.column,
+            identifier = identifier
+        })
     end
 end
 
+--- Set a specific player row in database to a identifer
+--- using a charid
+--- @param identifier string The identifier to resolve
+--- @param charid number The character ID to set for the player
+---
 function SetCharToIdentifier(identifier, charid)
-    for _, itable in pairs(IdentifierTables) do
-        MySQLAsyncExecute("UPDATE `"..itable.table.."` SET `"..itable.column.."` = '"..identifier.."' WHERE `"..itable.column.."` = 'Char"..charid..GetIdentifierWithoutLicense(identifier).."'")
+    local formatCharId = ('Char%s%s'):format(charid, GetIdentifierWithoutLicense(identifier))
+    for i = 1, #IdentifierTables, 1 do
+        local identifierObj = IdentifierTables[i]
+        MySQL.Async.execute([[
+            UPDATE @identTable
+            SET @tableColumn = @identifier
+            WHERE @tableColumn = @charID
+        ]], {
+            identTable = identifierObj.table,
+            tableColumn = identifierObj.column,
+            charID = formatCharId,
+            identifier = identifier
+        })
     end
 end
 
+--- Deletes character for a specific user using a charid
+--- @param identifier string The identifier to resolve
+--- @param charid number The character ID to set for the player
+---
 function DeleteCharacter(identifier, charid)
-    for _, itable in pairs(IdentifierTables) do
-        MySQLAsyncExecute("DELETE FROM `"..itable.table.."` WHERE `"..itable.column.."` = 'Char"..charid..GetIdentifierWithoutLicense(identifier).."'")
+    local formatCharId = ('Char%s%s'):format(charid, GetIdentifierWithoutLicense(identifier))
+    for i = 1, #IdentifierTables, 1 do
+        local identifierObj = IdentifierTables[i]
+        MySQL.Async.execute([[
+            DELETE FROM @identTable
+            WHERE @identColumn = @charID'
+        ]], {
+            charID = formatCharId,
+            identTable = identifierObj.table,
+            identColumn = identifierObj.column
+        })
     end
 end
 
-function GetSpawnPos(source)
-    local spawn = MySQLAsyncExecute("SELECT `position` FROM `users` WHERE `identifier` = '"..GetRockstarID(source).."'")
-    return json.decode(spawn[1].position)
+--- Get the last known position for player
+--- I feel very eh about this existing
+---@param src number PlayerID
+---@return table Table with values x, y ,z
+function GetSpawnPos(src)
+    local spawn = MySQL.Sync.fetchScalar("SELECT `position` FROM `users` WHERE `identifier` = @identifier", {
+        identifier = GetGameLicense(src)
+    })
+    return json.decode(spawn.position)
 end
 
-function GetIdentifierWithoutLicense(Identifier)
-    return string.gsub(Identifier, "license", "")
+--- Kinda useless NGL, substr function
+--- that returns the identifier without the license
+--- prefix.
+---@param ident string The license
+---@return string
+function GetIdentifierWithoutLicense(ident)
+    return ident:gsub("license", "")
 end
 
-function GetRockstarID(playerId)
+--- Quick util to get the identifier `license:` from a
+--- player (always license 1, never license2:)
+---@param playerId number PlayerID
+---@return string The game license
+function GetGameLicense(playerId)
     local identifier
+    local gameIdentifiers = GetPlayerIdentifiers(playerId)
 
-    for k,v in ipairs(GetPlayerIdentifiers(playerId)) do
-        if string.match(v, 'license') then
+    for i=1, #gameIdentifiers, 1 do
+        local ident = gameIdentifiers[i]
+        -- We are parsing specifically for license1 not license2 if available
+        if ident:match('license:') then
             identifier = v
             break
         end
     end
 
     return identifier
-end
-
-function MySQLAsyncExecute(query)
-    local IsBusy = true
-    local result = nil
-    MySQL.Async.fetchAll(query, {}, function(data)
-        result = data
-        IsBusy = false
-    end)
-    while IsBusy do
-        Citizen.Wait(0)
-    end
-    return result
 end
