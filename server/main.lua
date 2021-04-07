@@ -39,7 +39,7 @@ AddEventHandler('kashactersS:CharacterChosen', function(charid, ischar)
 
         TriggerClientEvent("kashactersC:SpawnCharacter", src, spawn, new)
     else
-        rint(('[^1esx_kashacters^0] %s. CharID: %s, Source: %s'):format('Type checked failed for char chosen event', charid, src))
+        print(('[^1esx_kashacters^0] %s. CharID: %s, Source: %s'):format('Type checked failed for char chosen event', charid, src))
     end
 end)
 
